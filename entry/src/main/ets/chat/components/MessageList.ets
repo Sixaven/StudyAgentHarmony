@@ -1,10 +1,12 @@
-import { ChatMessage, PendingMessage } from '../contracts/ChatMessage';
+import { ChatMessage, Citation, PendingMessage } from '../contracts/ChatMessage';
 import { MessageItem } from './MessageItem';
 
 @ComponentV2
 export struct MessageList {
   @Param @Require messages: ChatMessage[];
   @Param @Require pending: PendingMessage[];
+  @Event onSources: (citations: Citation[]) => void = () => {};
+  @Event onLinkError: (message: string) => void = () => {};
   @Param hasOlder: boolean = false;
   @Param loadingOlder: boolean = false;
   @Event onLoadOlder: () => void = () => {};
@@ -58,7 +60,7 @@ export struct MessageList {
         }
         ForEach(this.messages, (message: ChatMessage) => {
           ListItem() {
-            MessageItem({ message: message })
+            MessageItem({ message: message, onSources: this.onSources, onLinkError: this.onLinkError })
           }
         }, (message: ChatMessage) => message.messageId)
         ForEach(this.pending, (item: PendingMessage) => {

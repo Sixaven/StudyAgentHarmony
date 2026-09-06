@@ -1,3 +1,4 @@
+import { inputError } from './InputText';
 import { ChatMessage, PendingMessage } from '../contracts/ChatMessage';
 import { isActiveTask, TaskSnapshot } from '../contracts/ChatTask';
 
@@ -19,7 +20,7 @@ export class ChatState {
   get canSend(): boolean {
     const idle = this.phase === 'ready' || this.phase === 'failed';
     return this.initialized && idle && !isActiveTask(this.task) &&
-      this.pending.length === 0 && this.draft.trim().length > 0;
+      this.pending.length === 0 && inputError(this.draft) === '';
   }
 
   get canStop(): boolean {

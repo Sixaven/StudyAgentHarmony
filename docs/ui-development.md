@@ -1,6 +1,6 @@
-# UI 开发与 M1 验收
+# UI 开发与阶段验收
 
-2026-09-06。M1 的原生页面、客户端契约与状态归并已实现并在 API 20 模拟器运行；发送闭环、Markdown/来源、真实 HTTP/SSE、停止/重试/持久恢复按后续 Milestone 推进。
+2026-09-06。M1、M2 的原生聊天页、Markdown/来源和模拟发送闭环已实现并在 API 20 模拟器运行。真实 HTTP/SSE、停止/重试及持久恢复分别按 M3、M4 推进。
 
 ## 工程与入口
 
@@ -8,11 +8,11 @@
 - 页面：`entry/src/main/ets/pages/Index.ets`。依赖组装：`chat/bootstrap/ChatDependencies.ets`，组件不创建服务。
 - `createChatViewModel()` 默认使用 `FakeChatService('ready')`。开发时可传入 `empty`、`loading_error`、`running`、`partial_failure`。
 - 场景选择仅在组装代码里修改，页面不放场景选择器。顶部“模拟预览”表明当前数据为样例。
-- M1 输入可编辑，发送按钮校验空白和忙碌状态；点击只提示预览范围且保留草稿，不调用未实现的发送接口。停止回调亦不伪造成功。
-- `running` 初始快照进入核对中，禁止发送；订阅和恢复流程后续接入。
+- M2 已接通模拟发送：原文接受后转为正式用户消息，随后完整保存助手回复。按 Unicode 码点显示 2000 上限；处理中可编辑新草稿，不可并发发送。停止仍提示尚未接入，其实现属于 M4。
+- `running` 初始快照进入核对中，禁止发送；启动恢复流程在 M4 接入。M2 已观察本次新发送的任务。
 - `FakeChatService.emit()` / `failConnection()` 可受控推进观察者；dispose 仅解除观察，不等于停止任务。模拟服务未实现的方法明确拒绝，不能作为真实能力验收。
 
-参考规划库 `D:/VsCode/Project/StudyAgent/docs/tasks/ui/` 下的任务清单、契约 v0.3 及 `prototype/` 原型。M1 按原型落实配色、阅读版式、用户气泡、底部输入；正文暂为纯文本。明暗主题颜色放在 base/dark 资源中，不仿造系统状态栏。键盘用 API 20 支持的 `KeyboardAvoidMode.RESIZE`，保持标题和输入区可见，列表收缩。
+参考规划库 `D:/VsCode/Project/StudyAgent/docs/tasks/ui/` 下的任务清单、契约 v0.3 及 `prototype/` 原型。M1 按原型落实配色、阅读版式、用户气泡、底部输入；M2 已将助手 markdown 消息接入原生内容渲染；用户内容仍为普通文本。明暗主题颜色放在 base/dark 资源中，不仿造系统状态栏。键盘用 API 20 支持的 `KeyboardAvoidMode.RESIZE`，保持标题和输入区可见，列表收缩。
 
 ## 数据与协议样例
 
@@ -34,7 +34,7 @@ HTTP 未接受样例：
 }
 ```
 
-2000 按 Unicode 码点计数，原文不 trim 或改写。该服务端约束在发送阶段实现，不能直接用 TextArea.maxLength 的 UTF-16 语义替代。
+2000 按 Unicode 码点计数，原文不 trim 或改写。M2 在发送前和输入计数中使用同一个码点函数，不能直接用 TextArea.maxLength 的 UTF-16 语义替代。
 
 GET /api/v1/chat 的成功外壳：
 
@@ -116,3 +116,30 @@ $env:NODE_HOME = 'D:\Harmony\IDE\DevEco Studio\tools\node'
 已检查初始消息显示、空草稿发送禁用、输入后发送启用、点击模拟发送保留草稿、键盘展开时标题与输入区可见、列表滚动及回到最新。历史分页采用稳定 ID 和 maintainVisibleContentPosition 保持阅读位置；新增消息仅在跟随底部时自动滚动。
 
 `.test/` 保存本机设备截图，供复核，Git 忽略。此次只在上述模拟器验收，未声称已覆盖真机、多窗口、长时间运行或 M2–M4 的交互闭环。
+
+
+## M2 实现与内容组件选择
+
+M2 包含 UI-VIEW-02、UI-SOURCE-01、UI-SEND-01。以上 M1 检查记录保留为历史证据，本节说明当前行为。
+
+采用 API 20 自带 Text/Span、Scroll、bindSheet，未引入第三方渲染包。当前 entry 依赖清单为空，已安装 SDK 的原生组件声明中未发现 Markdown 组件；本阶段没有经过 API 20/V2 验证的第三方整套组件可直接复用。因此按任务允许的最小原生方案实现固定语法子集，并以本机编译和设备展示验证，不宣称穷尽或验证了第三方库。`entry/oh-package.json5` 与锁文件无需变更。
+
+参考 [OpenHarmony Text/Span 文档](https://github.com/openharmony/docs/blob/master/en/application-dev/reference/apis-arkui/arkui-ts/ts-basic-components-span.md)，最终接口以本机 API 20 SDK 编译结果为准。`UIAbilityContext.openLink` 的 SDK 声明 since 12，当前 API 20 构建通过；外部打开统一经 SourceLink，限定 http/https。
+
+- `MarkdownParser.ets`：ATX 标题、段落、有序/无序列表、单层粗体/斜体、行内代码、简单链接、反引号/波浪号围栏代码。保留代码缩进和空行；不完整围栏保留原文。复杂嵌套行内语法、表格、图片和 HTML 不作完整 Markdown 解释，保留可读文字。没有 HTML/WebView/脚本执行、流式拼接或代码执行。
+- `CodeBlock.ets`：等宽字体、长行横向滚动、超过 8 行可展开。状态由组件拥有，消息列表按 messageId、块按稳定位置标识；重复正式消息不会重建内容或折叠代码。
+- `SourceSheet.ets`：使用消息自带 citations，保持顺序、原文 URL 与历史版本信息，不检索、不改绑、不推断行内证据。日期为空显示未知，证据片段可展开；没有 citations 就没有来源按钮。
+- `InputText.ets`：统一码点计数及空白/超限校验。发送即固定 requestId/原文并显示待确认项；新的草稿不会因迟到接受或拒绝被覆盖。明确拒绝时仅在没有后续编辑的情况下恢复原文；未知结果保留待确认状态，禁止再次发送。
+- `ChatViewModel.ets`：进展仅作提示，message_saved 立即合并完整消息，终态合并全部成果并结束等待。已失败任务保留成果；completed 仅表示本次处理结束。已结束的接受响应或同步终态快照都不继续等待事件。观察释放不调用 stop。
+
+## M2 模拟场景与复核
+
+在 `ChatDependencies.ets` 创建的 FakeChatService 上设置 `replyScenario`，可选 normal、clarification、no_evidence、lesson_question、partial_failure、duplicate_events、terminal_snapshot、rejected。场景由开发配置指定，完全不解析用户文字来模拟业务路由。默认 normal 每 900ms 推进一个完整事件，不逐字生成。测试设置 `autoAdvance = false` 后调用 `advance()`，不依赖实际等待时间；网络断开用 `failConnection()`。
+
+UI 代码新增范围还包括 MessageList 的来源/链接错误回调传递、ChatService 回调的显式函数类型（满足 ArkTS 对对象字面量的限制）、独立解析/输入/模拟回复文件。未更改 Agent 公共 DTO 字段或业务规则。
+
+M2 验收：当前 API 20 ArkTS build 通过；Code Linter 0 错误、6 条组件拆分建议（M1 的 4 条加 CodeBlock、SourceSheet），未关闭规则。Hypium 共 26 项通过，0 失败/错误；包含已完成 M1 的 11 项与本次 15 项。测试覆盖 Unicode 边界、原文、双击发送、明确拒绝与未知接受、后续草稿、澄清/无证据、分次保存、部分失败、重复事件、直接终态与观察释放，以及 Markdown 的不完整输入和非 Web 链接拒绝。
+
+模拟器实测发送和完整回复、代码展开/横向滚动、滚动后返回最新且展开状态保留、来源弹层/证据片段、键盘布局。点击 http/https 原文后系统显示“暂无可用打开方式”，应用显示失败说明；这一设备缺少可用打开方式，未声称浏览器成功展示网页。成功打开需要在装有浏览器的设备复核。截图保存在 Git 忽略目录 `.test/m2-*.png`。
+
+M2 全部为模拟服务交互；真实 HTTP/SSE 在 M3，停止、重试、初始化活跃任务恢复与持久恢复在 M4。没有新增需要业务层协商的事项。

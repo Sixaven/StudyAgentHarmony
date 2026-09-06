@@ -1,3 +1,5 @@
+import { Citation } from '../chat/contracts/ChatMessage';
+import { SourceSheet } from '../chat/sources/SourceSheet';
 import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { createChatViewModel } from '../chat/bootstrap/ChatDependencies';
 import { ChatViewModel } from '../chat/state/ChatViewModel';
@@ -11,6 +13,13 @@ import { RequestStatus } from '../chat/components/RequestStatus';
 struct Index {
   private viewModel: ChatViewModel = createChatViewModel();
   @Local chat: ChatState = this.viewModel.state;
+  @Local sourcesVisible: boolean = false;
+  @Local selectedSources: Citation[] = [];
+
+  @Builder
+  sourcesContent() {
+    SourceSheet({ citations: this.selectedSources })
+  }
 
   aboutToAppear(): void {
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
@@ -41,7 +50,12 @@ struct Index {
         MessageList({
           messages: this.chat.messages, pending: this.chat.pending,
           hasOlder: this.chat.olderCursor !== null, loadingOlder: this.chat.loadingOlder,
-          onLoadOlder: () => { this.viewModel.loadOlder(); }
+          onLoadOlder: () => { this.viewModel.loadOlder(); },
+          onSources: (citations: Citation[]) => {
+            this.selectedSources = citations;
+            this.sourcesVisible = true;
+          },
+          onLinkError: (message: string) => { this.chat.notice = message; }
         })
       }.layoutWeight(1).width('100%')
       RequestStatus({
@@ -58,5 +72,6 @@ struct Index {
     }
     .width('100%').height('100%')
     .backgroundColor($r('app.color.chat_background'))
+    .bindSheet($$this.sourcesVisible, this.sourcesContent(), { height: '70%', showClose: true })
   }
 }

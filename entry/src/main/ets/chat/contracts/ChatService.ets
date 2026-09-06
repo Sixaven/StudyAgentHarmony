@@ -47,12 +47,12 @@ export class ChatServiceError extends Error {
 }
 
 export interface ChatSubscription {
-  dispose(): void;
+  dispose: () => void;
 }
 
 export interface ChatObserver {
-  onEvent(event: ChatEvent): void;
-  onError(error: ChatServiceError): void;
+  onEvent: (event: ChatEvent) => void;
+  onError: (error: ChatServiceError) => void;
 }
 
 export interface ChatService {
