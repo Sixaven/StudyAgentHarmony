@@ -152,7 +152,7 @@ M3 客户端实现已完成：ChatApi 通过 RcpTransport 提供 HTTP 请求，T
 
 - RcpTransport 使用 Session.fetch(Request)，每个操作独立拥有 Session；普通请求在 finally 关闭，流式观察释放只取消当前请求。ChatApi.close() / RcpTransport.close() 提供整体取消入口；应用前后台与依赖销毁的统一所有权仍由 M4 接入。
 - 普通请求默认 15 秒；SSE 无整体传输时限，连接超时 15 秒、空闲超时 90 秒，服务端应在空闲时限内提供心跳。全部关闭自动重定向，不执行隐式 POST 重试；取消已发送 POST 不证明服务端未接受。
-- HTTP 成功和失败外壳均校验。已约定 HTTP 拒绝保留 code/message/details.existingTaskId；写请求的错误外壳还必须对应原 requestId。网络失败、非法 JSON、身份不匹配或未知响应保留 network 类别，并用 protocol_error 区分协议问题。HTTP 200 的 failed 任务和 202 的终态发送响应均正常返回。
+- HTTP 成功和失败外壳均校验。已约定 HTTP 拒绝保留 code/message/details.existingTaskId；写请求错误外壳的 requestId 可省略；提供时必须是与原请求一致的非空字符串。POST 503 可能发生在接受后的读取阶段，保留为结果未知并核对，不据此清除待确认请求。网络失败、非法 JSON、身份不匹配或未知响应保留 network 类别，并用 protocol_error 区分协议问题。HTTP 200 的 failed 任务和 202 的终态发送响应均正常返回。
 - ResponseValidation 独立校验 ID、安全整数、枚举、UTC 时间、消息/引用/定位与 task；允许 legacy/local 空归属，首版 draftId=null、previews=[]。字段校验不会重新检索来源或推断学习动作。
 - HTTP 正文最多 8 MiB；SSE 单帧及未完成行最多 1 Mi 个 UTF-16 单元，UTF-8 解码最多保留一个未完成码点。超过边界报告协议异常，不截断正式内容。SSE 支持跨字节中文/emoji、BOM、CRLF/LF/CR、注释心跳和多行 data。
 - SSE 先校验 200 与 text/event-stream，再消费字节；第一条已知事件必须是 task_snapshot。连接内 id 去重和缺口检查覆盖未知事件，但未知事件正文不解析。已知事件非法则核对；未知进展 phase 按已确认契约降级为 processing。
@@ -181,3 +181,11 @@ node docs/testing/chat-protocol-server.mjs normal
 本次设备检查确认 GET 聊天、POST 接受、SSE 保存中文/emoji 完整消息及正常终态；另以 eof 场景确认已保存内容仍显示，页面进入“正在确认上次处理结果”，不解除发送限制。截图保存在 Git 忽略目录 .test/m3-rcp-*.png。检查结束恢复 fake/空地址默认值，不提交临时端口地址。
 
 真实联调待 Agent 层交付：契约 v0.3 的聊天读取/接受/查询与 SSE 初始快照、消息保存、公开终态接口及启动方式。当前没有新增需要 UI 与业务层直接协商的事项。M3 实现已交付，但完整阶段的真实 Agent 连通门槛仍未关闭；M4 不因协议替身通过而视为完成。
+
+## 后端交付后的错误响应兼容修正
+
+已对接现有聊天后端：错误外壳允许省略 requestId，400/404/409 的有效错误按明确拒绝处理，保留 busy、request_conflict、retry_not_allowed 和 details.existingTaskId。若携带 requestId，则仍拒绝空值、错误类型及身份不匹配。POST 503 按结果未知处理，因为后端可能已接受但暂时无法读回成果；不自动重发或清理待确认请求。
+
+本次新增三项回归检查，覆盖真实后端无 requestId 的错误外壳、冲突详情、非法可选 ID 与 POST 503。此前 M3 的 51 项检查为历史结果，本次执行结果单独记录。后端 busy 为现行公共错误码，UI 契约已同步。
+
+本次复核：54 项 Hypium 测试通过（原 51 项 + 3 项错误响应回归），API 20 构建通过。使用 UI 实际协议解析代码连接真实本地 HTTP/SSE、临时 SQLite 和脚本模型，确认 busy/request_conflict/retry_not_allowed/not_found 均映射为 rejected，完整 SSE 与终态保持正常；此项在 Node 中转译执行传输无关代码，不替代 HarmonyOS 设备联调。

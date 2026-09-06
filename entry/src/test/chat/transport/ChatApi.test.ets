@@ -70,6 +70,65 @@ export default function chatApiTest() {
       }
     });
 
+    it('acceptsBackendRejectionsWithoutOptionalRequestId', 0, async () => {
+      const transport = new ProtocolTransport();
+      const api = new ChatApi(transport);
+      transport.reply = { status: 400,
+        body: '{"error":{"code":"invalid_input","message":"输入无效"}}' };
+      expect(await failureCode(() => api.send({ requestId: 'r', text: 'hi' })))
+        .assertEqual('rejected:invalid_input');
+      transport.reply = { status: 409,
+        body: '{"error":{"code":"request_conflict","message":"请求冲突"}}' };
+      expect(await failureCode(() => api.send({ requestId: 'r', text: 'hi' })))
+        .assertEqual('rejected:request_conflict');
+      transport.reply = { status: 404,
+        body: '{"error":{"code":"not_found","message":"任务不存在"}}' };
+      expect(await failureCode(() => api.stop('missing', 'r'))).assertEqual('rejected:not_found');
+    });
+
+    it('preservesBusyAndRetryDetailsWithoutRequestId', 0, async () => {
+      const transport = new ProtocolTransport();
+      const api = new ChatApi(transport);
+      const codes = ['busy', 'retry_not_allowed'];
+      for (let index = 0; index < codes.length; index++) {
+        transport.reply = { status: 409, body: JSON.stringify({
+          error: { code: codes[index], message: '已有任务',
+            details: { existingTaskId: 'existing' } } as ServiceError
+        }) };
+        try {
+          if (index === 0) {
+            await api.send({ requestId: 'r', text: 'hi' });
+          } else {
+            await api.retry('old', 'r');
+          }
+          expect(false).assertTrue();
+        } catch (error) {
+          expect(error instanceof ChatServiceError).assertTrue();
+          const failure = error as ChatServiceError;
+          expect(failure.kind).assertEqual('rejected');
+          expect(failure.detail.code).assertEqual(codes[index]);
+          expect(failure.detail.details?.existingTaskId).assertEqual('existing');
+        }
+      }
+    });
+
+    it('validatesOptionalIdWhenPresentAndKeeps503WritesUnknown', 0, async () => {
+      const transport = new ProtocolTransport();
+      const api = new ChatApi(transport);
+      for (const id of ['null', '123', '""', '"other"']) {
+        transport.reply = { status: 409,
+          body: '{"requestId":' + id + ',"error":{"code":"busy","message":"忙"}}' };
+        expect(await failureCode(() => api.send({ requestId: 'r', text: 'hi' })))
+          .assertEqual('network:protocol_error');
+      }
+      transport.reply = { status: 503,
+        body: '{"error":{"code":"unavailable","message":"已接受结果暂不可读"}}' };
+      expect(await failureCode(() => api.send({ requestId: 'r', text: 'hi' })))
+        .assertEqual('network:unavailable');
+      expect(await failureCode(() => api.stop('t', 'r'))).assertEqual('network:unavailable');
+      expect(await failureCode(() => api.retry('t', 'r'))).assertEqual('network:unavailable');
+    });
+
     it('doesNotTreatMalformedRejectionAsDefinitelyUnaccepted', 0, async () => {
       const transport = new ProtocolTransport();
       const api = new ChatApi(transport);

@@ -30,10 +30,17 @@ export class ChatApi implements ChatService {
       if (![400, 404, 409, 503].includes(response.status) || envelope['data'] !== undefined) {
         throw protocolError();
       }
-      if (requestId !== undefined && text(envelope['requestId'], true) !== requestId) {
+      if (requestId !== undefined && envelope['requestId'] !== undefined &&
+        text(envelope['requestId'], true) !== requestId) {
         throw protocolError();
       }
-      throw ChatServiceError.fromServiceError(serviceError(envelope['error']));
+      const failure = serviceError(envelope['error']);
+      // The server can report 503 after acceptance when the saved result cannot
+      // be read. Preserve the request for reconciliation instead of resending.
+      if (method === 'POST' && response.status === 503) {
+        throw new ChatServiceError('network', failure.code, failure.message, failure.details);
+      }
+      throw ChatServiceError.fromServiceError(failure);
     }
     if ((method === 'GET' && response.status !== 200) ||
       envelope['data'] === undefined || envelope['error'] !== undefined) {
