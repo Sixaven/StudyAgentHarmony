@@ -1,3 +1,4 @@
+import { ChatServiceError } from '../../../main/ets/chat/contracts/ChatService';
 import { describe, it, expect } from '@ohos/hypium';
 import { sampleMessage, sampleTask, olderPage, initialChat, partialFailure } from '../../../main/ets/chat/demo/ChatFixtures';
 import { FakeChatService } from '../../../main/ets/chat/demo/FakeChatService';
@@ -7,6 +8,27 @@ import { PendingMessage } from '../../../main/ets/chat/contracts/ChatMessage';
 
 export default function chatStateTest() {
   describe('ChatState', () => {
+    it('preservesSuccessorIdWhenConvertingRejectedError', 0, () => {
+      const error = ChatServiceError.fromServiceError({
+        code: 'retry_not_allowed', message: '已有后继任务。',
+        details: { existingTaskId: 'successor-task' }
+      });
+      expect(error.kind).assertEqual('rejected');
+      expect(error.detail.code).assertEqual('retry_not_allowed');
+      expect(error.detail.details?.existingTaskId).assertEqual('successor-task');
+      expect(error.message).assertEqual('已有后继任务。');
+    });
+
+    it('doesNotInventDetailsForOtherRejectionsOrNetworkErrors', 0, () => {
+      const error = ChatServiceError.fromServiceError({
+        code: 'retry_not_allowed', message: '当前任务不可重试。'
+      });
+      expect(error.detail.details === undefined).assertTrue();
+      const network = new ChatServiceError('network', 'unavailable', '连接失败。');
+      expect(network.kind).assertEqual('network');
+      expect(network.detail.details === undefined).assertTrue();
+    });
+
     it('mergesOverlappingPagesByIdentityInSequenceOrder', 0, () => {
       const merged = mergeMessages(initialChat().messages, olderPage().messages);
       expect(merged.length).assertEqual(3);

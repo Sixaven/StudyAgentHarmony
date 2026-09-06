@@ -3,9 +3,14 @@ import { ChatMessage } from './ChatMessage';
 export type TaskStatus = 'running' | 'stopping' | 'completed' | 'failed' | 'cancelled';
 export type ProgressPhase = 'processing' | 'searching' | 'saving';
 
+export interface ServiceErrorDetails {
+  existingTaskId?: string;
+}
+
 export interface ServiceError {
   code: string;
   message: string;
+  details?: ServiceErrorDetails;
 }
 
 export interface ReplyPreview {

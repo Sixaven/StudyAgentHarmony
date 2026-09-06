@@ -61,7 +61,24 @@ data: {"chatId":"demo-chat","taskId":"demo-task","requestId":"demo-request","pha
 
 task_snapshot/task_finished 带 task，message_saved 带 message/taskRevision；所有事件带 chatId/taskId/requestId。ChatEvent 是传输无关的客户端信封，HTTP/SSE 原始 JSON 的字段校验在 M3 实现。
 
-当前 ProgressPhase 采用契约列举的 processing/searching/saving；这不是宣称服务端已冻结完整枚举。Agent 侧提供真实公开接口时，需要核对进展枚举及安全错误消息与这些样例是否一致。该后续对齐由 UI 与 Agent 完成，没有新增要求业务层提供的能力，也不改变第 6 节已确认的四项约定。
+Agent 已确认首版 ProgressPhase 只有 processing/searching/saving；停止中用 task.status=stopping 表示，不增加 phase。发送返回 data={userMessage,task}；停止、重试和单任务查询直接返回 data=TaskSnapshot；请求查询返回 data={requestId,kind,task}。现有 ChatService 返回解包后的对应类型，不额外包裹 task。HTTP 200 读取 failed 快照仍是正常返回，不转换成拒绝错误。
+
+ServiceError.details 是可选对象，支持 existingTaskId。ChatServiceError 构造器及 fromServiceError 保留该字段；缺失详情时不编造 ID。fromServiceError 接受已校验 DTO，原始 HTTP JSON 校验留在 M3。
+
+同一原任务已有直接后继时，新的重试请求返回 HTTP 409：
+
+```json
+{
+  "error": {
+    "code": "retry_not_allowed",
+    "message": "该任务已有后续重试，请查看已有任务。",
+    "details": { "existingTaskId": "successor-task" }
+  },
+  "requestId": "new-retry-request"
+}
+```
+
+此 ID 用于后续查询任务并刷新聊天，不自动再发 retry。同 requestId 的幂等重放仍优先返回原成功结果；其他无后继的资格失败不携带 existingTaskId。以上对接已获 Agent 确认，M1 无需等待后端上线，真实通信联调仍属于后续阶段。
 
 ## 已执行的检查
 
@@ -77,7 +94,7 @@ devecocli ui layout --device '127.0.0.1:5555'
 
 - build/run：CompileArkTS、资源编译、HAP 打包通过，并在 Mate 70 Pro / HarmonyOS 6.0.0.48（API 20）模拟器安装及启动成功。
 - lint：0 错误，4 条 avoid-overusing-custom-component-check 警告，分别针对任务清单明确拆出的 MessageList、MessageItem、Composer、RequestStatus。保留职责边界，未禁用规则；没有收到这四条以外的代码问题。
-- check compat versions：当前 Studio 缺少所需组件，该命令要求 26.0.0.810 及以上；未进行跨 SDK 兼容性扫描，不冒充通过。实际 API 20 兼容性由当前 SDK 编译及模拟器运行核验。
+- 用户已确认不执行跨 SDK 兼容性扫描，不列为待办或验收门槛；仅验证当前 API 20。
 - emulator list：CLI 子命令要求 Studio 6.1.0；使用 6.0 Studio 自带 Emulator 启动已有 API 20 实例，无下载或升级。
 - 未配置签名时构建产生 unsigned HAP，此模拟器已成功安装。真机签名和发布证书不属于此次验收。
 - 本机缺少 wmic 会产生 Hvigor 环境警告，但构建与测试正常结束。
@@ -90,7 +107,7 @@ $env:NODE_HOME = 'D:\Harmony\IDE\DevEco Studio\tools\node'
 & 'D:\Harmony\IDE\DevEco Studio\tools\hvigor\bin\hvigorw.bat' --mode module -p product=default -p 'module=entry@default' test
 ```
 
-实测 9 项通过、0 失败、0 错误（8 项 ChatState + 1 项模板）。检查跨页重叠、相同正文不同 ID、旧消息空归属、待确认转正式、加载失败重试、活跃任务阻止发送、低版本忽略、部分成果保留、分页/重新加载草稿保留及卸载后丢弃加载结果。
+实测 11 项通过、0 失败、0 错误（10 项 ChatState/契约检查 + 1 项模板），包括此次新增的错误详情保留及缺省详情检查。检查跨页重叠、相同正文不同 ID、旧消息空归属、待确认转正式、加载失败重试、活跃任务阻止发送、低版本忽略、部分成果保留、分页/重新加载草稿保留及卸载后丢弃加载结果。
 
 结果文件：`entry/.test/default/intermediates/test/coverage_data/test_result.txt`；HTML 报告位于 `entry/.test/default/outputs/test/reports/index.html`。这些是生成产物，不提交 Git。
 

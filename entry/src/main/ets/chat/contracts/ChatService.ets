@@ -1,5 +1,5 @@
 import { ChatMessage, MessagePage } from './ChatMessage';
-import { ChatEvent, ServiceError, TaskSnapshot } from './ChatTask';
+import { ChatEvent, ServiceError, ServiceErrorDetails, TaskSnapshot } from './ChatTask';
 
 export interface ChatSnapshot {
   chatId: string;
@@ -31,10 +31,18 @@ export class ChatServiceError extends Error {
   kind: 'rejected' | 'network';
   detail: ServiceError;
 
-  constructor(kind: 'rejected' | 'network', code: string, message: string) {
+  constructor(kind: 'rejected' | 'network', code: string, message: string, details?: ServiceErrorDetails) {
     super(message);
     this.kind = kind;
     this.detail = { code: code, message: message };
+    if (details !== undefined) {
+      this.detail.details = { existingTaskId: details.existingTaskId };
+    }
+  }
+
+  // Accept only a validated DTO; raw HTTP JSON validation belongs to the transport.
+  static fromServiceError(error: ServiceError): ChatServiceError {
+    return new ChatServiceError('rejected', error.code, error.message, error.details);
   }
 }
 
