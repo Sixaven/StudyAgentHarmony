@@ -1,3 +1,4 @@
+import { chatConfiguration } from '../chat/bootstrap/ChatConfig';
 import { Citation } from '../chat/contracts/ChatMessage';
 import { SourceSheet } from '../chat/sources/SourceSheet';
 import { KeyboardAvoidMode } from '@kit.ArkUI';
@@ -40,7 +41,7 @@ struct Index {
             .fontColor($r('app.color.chat_secondary'))
         }.alignItems(HorizontalAlign.Start)
         Blank()
-        Text($r('app.string.chat_demo')).fontSize(11)
+        Text(chatConfiguration.mode === 'fake' ? '模拟预览' : '在线服务').fontSize(11)
           .fontColor($r('app.color.chat_accent'))
           .padding({ left: 10, right: 10, top: 6, bottom: 6 })
           .backgroundColor($r('app.color.chat_bubble')).borderRadius(12)

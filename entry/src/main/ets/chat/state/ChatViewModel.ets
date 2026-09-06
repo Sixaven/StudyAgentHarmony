@@ -9,6 +9,7 @@ import { mergeMessages, remainingPending } from './MessageCollection';
 export class ChatViewModel {
   readonly state: ChatState = new ChatState();
   private service: ChatService;
+  private observedRevision: number = -1;
   private loadGeneration: number = 0;
   private operationGeneration: number = 0;
   private draftRevision: number = 0;
@@ -32,6 +33,7 @@ export class ChatViewModel {
       this.merge(snapshot.messages);
       this.state.olderCursor = snapshot.olderCursor;
       this.state.task = null;
+      this.observedRevision = -1;
       if (snapshot.latestTask !== null) {
         this.merge(snapshot.latestTask.savedMessages);
       }
@@ -69,14 +71,17 @@ export class ChatViewModel {
   applyTask(task: TaskSnapshot | null): void {
     if (task === null) {
       this.state.task = null;
+      this.observedRevision = -1;
       this.state.phase = 'ready';
       return;
     }
     this.merge(task.savedMessages);
     const current = this.state.task;
-    if (current !== null && current.taskId === task.taskId && current.revision >= task.revision) {
+    if (current !== null && current.taskId === task.taskId &&
+      (current.revision >= task.revision || this.observedRevision > task.revision)) {
       return;
     }
+    this.observedRevision = task.revision;
     this.state.task = task;
     this.state.notice = '';
     if (task.status === 'running') {
@@ -171,6 +176,9 @@ export class ChatViewModel {
         }
         if (event.event === 'message_saved' && event.message !== undefined) {
           this.merge([event.message]);
+          if (event.taskRevision !== undefined) {
+            this.observedRevision = Math.max(this.observedRevision, event.taskRevision);
+          }
         } else if (event.event === 'task_snapshot' || event.event === 'task_finished') {
           if (event.task !== undefined && event.task.taskId === task.taskId) {
             this.applyTask(event.task);

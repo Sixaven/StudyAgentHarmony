@@ -1,6 +1,6 @@
 # UI 开发与阶段验收
 
-2026-09-06。M1、M2 的原生聊天页、Markdown/来源和模拟发送闭环已实现并在 API 20 模拟器运行。真实 HTTP/SSE、停止/重试及持久恢复分别按 M3、M4 推进。
+2026-09-06。M1、M2 的原生聊天页、Markdown/来源和模拟发送闭环已实现并在 API 20 模拟器运行。M3 HTTP/SSE 客户端适配与协议替身设备检查已完成，真实 Agent API 连通待服务端交付；停止/重试及持久恢复按 M4 推进。
 
 ## 工程与入口
 
@@ -16,7 +16,7 @@
 
 ## 数据与协议样例
 
-客户端 DTO 按已确认 UI/API 契约声明；尚未接入 HTTP 服务，以下只是契约样例。UI 不推断学习动作、不访问业务层，也不保存掌握度。
+客户端 DTO 按已确认 UI/API 契约声明；以下是契约样例，M3 已实现 HTTP/SSE 校验与适配，尚未完成真实 Agent 服务联调。UI 不推断学习动作、不访问业务层，也不保存掌握度。
 
 - 正式消息按 messageId 去重，sequence 排序；相同正文不同 ID 保留。重复快照不修改初次 requestId/taskId。
 - 用户消息 requestId 匹配时移除待确认项；助手消息的相同 requestId 不能确认用户发送。
@@ -143,3 +143,41 @@ M2 验收：当前 API 20 ArkTS build 通过；Code Linter 0 错误、6 条组�
 模拟器实测发送和完整回复、代码展开/横向滚动、滚动后返回最新且展开状态保留、来源弹层/证据片段、键盘布局。点击 http/https 原文后系统显示“暂无可用打开方式”，应用显示失败说明；这一设备缺少可用打开方式，未声称浏览器成功展示网页。成功打开需要在装有浏览器的设备复核。截图保存在 Git 忽略目录 `.test/m2-*.png`。
 
 M2 全部为模拟服务交互；真实 HTTP/SSE 在 M3，停止、重试、初始化活跃任务恢复与持久恢复在 M4。没有新增需要业务层协商的事项。
+
+## M3 HTTP/SSE 适配与运行配置
+
+M3 客户端实现已完成：ChatApi 通过 RcpTransport 提供 HTTP 请求，TaskSubscription 负责 SSE 观察。编译依据是本机 API 20 的 RemoteCommunicationKit 声明（@hms.collaboration.rcp.d.ts），实际 RCP 请求和 UTF-8 分块消息已在 API 20 模拟器与协议替身之间验证。真实 Agent 聊天 HTTP/API 尚未交付，不将此结果称为 Agent 联调通过。
+
+在 chat/bootstrap/ChatConfig.ets 中设置 mode、baseUrl、requestTimeoutMs、streamIdleTimeoutMs。提交默认是 fake 和空地址；选择 real 后必须填设备可访问、包含 /api/v1 的 http/https 地址。ChatDependencies 不会因错误回退到 FakeChatService。页面标明“模拟预览”或“在线服务”；“在线服务”只描述通信模式，不表示模型、数据库或 Agent 已验收。客户端不包含模型密钥。
+
+- RcpTransport 使用 Session.fetch(Request)，每个操作独立拥有 Session；普通请求在 finally 关闭，流式观察释放只取消当前请求。ChatApi.close() / RcpTransport.close() 提供整体取消入口；应用前后台与依赖销毁的统一所有权仍由 M4 接入。
+- 普通请求默认 15 秒；SSE 无整体传输时限，连接超时 15 秒、空闲超时 90 秒，服务端应在空闲时限内提供心跳。全部关闭自动重定向，不执行隐式 POST 重试；取消已发送 POST 不证明服务端未接受。
+- HTTP 成功和失败外壳均校验。已约定 HTTP 拒绝保留 code/message/details.existingTaskId；写请求的错误外壳还必须对应原 requestId。网络失败、非法 JSON、身份不匹配或未知响应保留 network 类别，并用 protocol_error 区分协议问题。HTTP 200 的 failed 任务和 202 的终态发送响应均正常返回。
+- ResponseValidation 独立校验 ID、安全整数、枚举、UTC 时间、消息/引用/定位与 task；允许 legacy/local 空归属，首版 draftId=null、previews=[]。字段校验不会重新检索来源或推断学习动作。
+- HTTP 正文最多 8 MiB；SSE 单帧及未完成行最多 1 Mi 个 UTF-16 单元，UTF-8 解码最多保留一个未完成码点。超过边界报告协议异常，不截断正式内容。SSE 支持跨字节中文/emoji、BOM、CRLF/LF/CR、注释心跳和多行 data。
+- SSE 先校验 200 与 text/event-stream，再消费字节；第一条已知事件必须是 task_snapshot。连接内 id 去重和缺口检查覆盖未知事件，但未知事件正文不解析。已知事件非法则核对；未知进展 phase 按已确认契约降级为 processing。
+- 缺口仅自动建立一次全新快照订阅，不发 Last-Event-ID；再次缺口或普通断流通知 ViewModel 进入 checking。订阅代次隔离旧回调，初始终态快照即可释放连接；EOF 永远不生成任务终态。
+- ViewModel 独立合并正式消息，使用 message_saved.taskRevision 防止旧 HTTP/事件快照更新任务状态；同 ID 消息不重复，不跨任务比较 revision。停止、失败重试、断线按钮操作和重开恢复仍属于 M4。
+
+## M3 可重复协议检查
+
+本地测试沿用前述 Hvigor test 命令，新增 ChatApi、SseDecoder、TaskEvents，共 51 项通过（原 26 项 + M3 25 项）。API 20 构建通过，Code Linter 0 错误、原有 6 条组件拆分建议。测试替身直接注入 ChatTransport，不替代 SDK 编译及设备传输检查。
+
+设备网络检查使用 docs/testing/chat-protocol-server.mjs，它只提供固定协议响应，没有 Agent、模型、学习规则或持久数据库。运行：
+
+~~~powershell
+node docs/testing/chat-protocol-server.mjs normal
+# 或 eof：保存完整消息后断流；failed：保存后发送失败终态。
+~~~
+
+本次使用已有 Mate 70 Pro / HarmonyOS 6.0.0.48（API 20）模拟器。明确建立设备到主机的端口转发后，临时 real 配置才使用 http://127.0.0.1:8787/api/v1：
+
+~~~powershell
+& 'D:/Harmony/IDE/DevEco Studio/sdk/default/openharmony/toolchains/hdc.exe' -t 127.0.0.1:5555 rport tcp:8787 tcp:8787
+~~~
+
+这里的 localhost 由显式转发成立；真机或无转发环境应填主机可达地址，不照抄。协议替身仅监听主机 127.0.0.1，普通局域网真机连接需要另行配置可达接口。
+
+本次设备检查确认 GET 聊天、POST 接受、SSE 保存中文/emoji 完整消息及正常终态；另以 eof 场景确认已保存内容仍显示，页面进入“正在确认上次处理结果”，不解除发送限制。截图保存在 Git 忽略目录 .test/m3-rcp-*.png。检查结束恢复 fake/空地址默认值，不提交临时端口地址。
+
+真实联调待 Agent 层交付：契约 v0.3 的聊天读取/接受/查询与 SSE 初始快照、消息保存、公开终态接口及启动方式。当前没有新增需要 UI 与业务层直接协商的事项。M3 实现已交付，但完整阶段的真实 Agent 连通门槛仍未关闭；M4 不因协议替身通过而视为完成。
