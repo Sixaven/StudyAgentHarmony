@@ -1,3 +1,4 @@
+import { MemoryPendingRequestStore, PendingOperation, PendingRequestStore } from '../recovery/PendingRequestStore';
 import { ChatMessage } from '../contracts/ChatMessage';
 import { util } from '@kit.ArkTS';
 import { ChatService, ChatServiceError, ChatSubscription, SendRequest } from '../contracts/ChatService';
@@ -16,16 +17,51 @@ export class ChatViewModel {
   private subscription: ChatSubscription | null = null;
   private observationGeneration: number = 0;
 
-  constructor(service: ChatService) {
+  private store: PendingRequestStore;
+  private nextRequestId: () => string;
+
+  constructor(service: ChatService, store: PendingRequestStore = new MemoryPendingRequestStore(),
+    nextRequestId: () => string = () => util.generateRandomUUID(true)) {
     this.service = service;
+    this.store = store;
+    this.nextRequestId = nextRequestId;
   }
 
   async load(): Promise<void> {
+    if (this.state.controlBusy) {
+      return;
+    }
     const generation = ++this.loadGeneration;
+    this.releaseObservation();
     this.state.phase = 'loading';
     this.state.initialLoadFailed = false;
     this.state.notice = '';
     try {
+      const pending = this.store.read();
+      this.state.hasUnconfirmed = pending !== null;
+      if (pending !== null) {
+        if (pending.kind === 'send') {
+          this.state.pending = [{ requestId: pending.requestId, text: pending.text }];
+        }
+        try {
+          const result = await this.service.findRequest(pending.requestId);
+          if (generation !== this.loadGeneration) {
+            return;
+          }
+          if (result.kind !== pending.kind ||
+            (pending.kind === 'stop' && result.task.taskId !== pending.taskId)) {
+            throw new Error('请求核对结果不一致。');
+          }
+          this.merge(result.task.savedMessages);
+          this.clearPending();
+        } catch (error) {
+          if (!(error instanceof ChatServiceError && error.kind === 'rejected' &&
+            error.detail.code === 'not_found')) {
+            throw new Error(String(error));
+          }
+          // Only an explicit user retry may replay a write absent from the server.
+        }
+      }
       const snapshot = await this.service.loadChat();
       if (generation !== this.loadGeneration) {
         return;
@@ -39,9 +75,11 @@ export class ChatViewModel {
       }
       this.applyTask(snapshot.activeTask ?? snapshot.latestTask);
       this.state.initialized = true;
-      // Initial active-task recovery is implemented in M4; M2 observes newly accepted sends.
-      if (isActiveTask(this.state.task)) {
+      if (this.state.hasUnconfirmed) {
         this.state.phase = 'checking';
+        this.state.notice = '上次请求尚未接受，点击重试继续核对并重发。';
+      } else if (isActiveTask(this.state.task) && this.state.task !== null) {
+        this.observe(this.state.task);
       }
     } catch {
       if (generation !== this.loadGeneration) {
@@ -49,12 +87,20 @@ export class ChatViewModel {
       }
       this.state.phase = 'failed';
       this.state.initialLoadFailed = true;
+      this.state.notice = '暂时无法确认服务端状态，请重试。';
     }
+  }
+
+  private clearPending(): void {
+    this.store.clear();
+    this.state.hasUnconfirmed = false;
   }
 
   dispose(): void {
     this.loadGeneration++;
     this.operationGeneration++;
+    this.state.controlBusy = false;
+    this.state.phase = 'checking';
     this.releaseObservation();
   }
 
@@ -90,13 +136,16 @@ export class ChatViewModel {
       this.state.phase = 'stopping';
     } else if (task.status === 'failed') {
       this.state.phase = 'failed';
-      this.state.notice = task.error?.message ?? '';
+      this.state.notice = task.reason === 'server_restarted' ?
+        '服务已重启，上次处理已结束，已保存的内容仍可阅读。' : (task.error?.message ?? '');
     } else {
       this.state.phase = 'ready';
+      this.state.notice = task.status === 'cancelled' ? '已停止，已保存的内容仍可阅读。' : '';
     }
   }
 
   async loadOlder(): Promise<void> {
+    const generation = this.loadGeneration;
     const cursor = this.state.olderCursor;
     if (cursor === null || this.state.loadingOlder) {
       return;
@@ -104,9 +153,15 @@ export class ChatViewModel {
     this.state.loadingOlder = true;
     try {
       const page = await this.service.loadOlder(cursor);
+      if (generation !== this.loadGeneration) {
+        return;
+      }
       this.merge(page.messages);
       this.state.olderCursor = page.olderCursor;
     } catch {
+      if (generation !== this.loadGeneration) {
+        return;
+      }
       this.state.notice = '更早的消息暂时无法加载，请重试。';
     } finally {
       this.state.loadingOlder = false;
@@ -122,7 +177,17 @@ export class ChatViewModel {
     if (!this.state.canSend) {
       return;
     }
-    const request: SendRequest = { requestId: util.generateRandomUUID(true), text: this.state.draft };
+    const request: SendRequest = { requestId: this.nextRequestId(), text: this.state.draft };
+    try {
+      this.store.save({ kind: 'send', requestId: request.requestId, text: request.text, taskId: '' });
+      this.state.hasUnconfirmed = true;
+    } catch {
+      this.state.hasUnconfirmed = true;
+      this.state.phase = 'checking';
+      this.state.notice = '无法保存待确认请求，尚未发送，请稍后重试。';
+      return;
+    }
+    this.state.controlBusy = true;
     const generation = ++this.operationGeneration;
     const sentDraftRevision = this.draftRevision;
     this.releaseObservation();
@@ -135,6 +200,7 @@ export class ChatViewModel {
       if (generation !== this.operationGeneration) {
         return;
       }
+      this.clearPending();
       this.merge([accepted.userMessage]);
       this.applyTask(accepted.task);
       if (isActiveTask(this.state.task)) {
@@ -145,6 +211,13 @@ export class ChatViewModel {
         return;
       }
       if (error instanceof ChatServiceError && error.kind === 'rejected') {
+        try {
+          this.clearPending();
+        } catch {
+          this.state.phase = 'checking';
+          this.state.notice = '请求未接受，但本地记录尚未清理，请重试。';
+          return;
+        }
         this.state.pending = [];
         this.state.phase = 'ready';
         this.state.notice = error.detail.message;
@@ -152,9 +225,20 @@ export class ChatViewModel {
         if (sentDraftRevision === this.draftRevision) {
           this.state.draft = request.text;
         }
+        if (error.detail.code === 'busy' || error.detail.code === 'request_conflict') {
+          this.state.controlBusy = false;
+          await this.load();
+          if (generation === this.operationGeneration) {
+            this.state.notice = error.detail.message;
+          }
+        }
       } else {
         this.state.phase = 'checking';
         this.state.notice = '连接已断开，发送结果尚未确认。';
+      }
+    } finally {
+      if (generation === this.operationGeneration) {
+        this.state.controlBusy = false;
       }
     }
   }
@@ -212,7 +296,156 @@ export class ChatViewModel {
     }
   }
 
-  requestStop(): void {
-    this.state.notice = '停止交互尚未接入。';
+  async requestStop(): Promise<void> {
+    const task = this.state.task;
+    if (!this.state.canStop || task === null) {
+      return;
+    }
+    await this.startControl('stop', task.taskId);
+  }
+
+  async requestRetry(): Promise<void> {
+    if (this.state.controlBusy) {
+      return;
+    }
+    if (this.state.canRetryLoad) {
+      await this.load();
+      return;
+    }
+    if (this.state.hasUnconfirmed || this.state.phase === 'checking') {
+      await this.reconcile();
+    } else if (this.state.canRetryTask && this.state.task !== null) {
+      await this.startControl('retry', this.state.task.taskId);
+    }
+  }
+
+  private async startControl(kind: 'stop' | 'retry', taskId: string): Promise<void> {
+    const operation: PendingOperation = {
+      kind: kind, requestId: this.nextRequestId(), taskId: taskId, text: ''
+    };
+    try {
+      this.store.save(operation);
+      this.state.hasUnconfirmed = true;
+    } catch {
+      this.state.hasUnconfirmed = true;
+      this.state.phase = 'checking';
+      this.state.notice = '无法保存待确认请求，操作尚未发出，请稍后重试。';
+      return;
+    }
+    const generation = ++this.operationGeneration;
+    this.state.controlBusy = true;
+    this.state.phase = kind === 'stop' ? 'stopping' : 'sending';
+    try {
+      await this.replay(operation, generation);
+    } catch (error) {
+      await this.handleControlError(error, generation);
+    } finally {
+      if (generation === this.operationGeneration) {
+        this.state.controlBusy = false;
+      }
+    }
+  }
+
+  private async replay(operation: PendingOperation, generation: number): Promise<void> {
+    let task: TaskSnapshot;
+    if (operation.kind === 'send') {
+      const accepted = await this.service.send({ requestId: operation.requestId, text: operation.text });
+      task = accepted.task;
+      if (generation === this.operationGeneration) {
+        this.merge([accepted.userMessage]);
+      }
+    } else if (operation.kind === 'stop') {
+      task = await this.service.stop(operation.taskId, operation.requestId);
+    } else {
+      task = await this.service.retry(operation.taskId, operation.requestId);
+    }
+    if (generation !== this.operationGeneration) {
+      return;
+    }
+    this.clearPending();
+    this.applyTask(task);
+    // A newer terminal event may have won the race with the HTTP response.
+    if (isActiveTask(this.state.task) && this.state.task !== null) {
+      this.observe(this.state.task);
+    }
+  }
+
+  private async handleControlError(error: Error, generation: number): Promise<void> {
+    if (generation !== this.operationGeneration) {
+      return;
+    }
+    if (error instanceof ChatServiceError && error.kind === 'rejected') {
+      try {
+        this.clearPending();
+        this.state.pending = [];
+      } catch {
+        this.state.phase = 'checking';
+        this.state.notice = '本地记录尚未清理，请重试。';
+        return;
+      }
+      this.state.controlBusy = false;
+      await this.load();
+      if (generation === this.operationGeneration) {
+        this.state.notice = error.detail.message;
+      }
+    } else {
+      this.state.phase = 'checking';
+      this.state.notice = '连接已断开，点击重试确认上次操作结果。';
+    }
+  }
+
+  private async reconcile(): Promise<void> {
+    const generation = ++this.operationGeneration;
+    this.state.controlBusy = true;
+    try {
+      const operation = this.store.read();
+      if (operation !== null) {
+        let missing = false;
+        try {
+          const result = await this.service.findRequest(operation.requestId);
+          if (generation !== this.operationGeneration) {
+            return;
+          }
+          if (result.kind !== operation.kind ||
+            (operation.kind === 'stop' && result.task.taskId !== operation.taskId)) {
+            throw new Error('请求核对结果不一致。');
+          }
+          this.merge(result.task.savedMessages);
+          this.clearPending();
+        } catch (error) {
+          if (error instanceof ChatServiceError && error.kind === 'rejected' &&
+            error.detail.code === 'not_found') {
+            missing = true;
+          } else {
+            throw new Error(String(error));
+          }
+        }
+        if (generation !== this.operationGeneration) {
+          return;
+        }
+        if (missing) {
+          try {
+            await this.replay(operation, generation);
+          } catch (error) {
+            await this.handleControlError(error, generation);
+            return;
+          }
+        }
+      }
+      if (generation === this.operationGeneration) {
+        this.state.controlBusy = false;
+        await this.load();
+      }
+    } catch (error) {
+      // A failed lookup is not proof of non-acceptance and never permits another POST.
+      if (generation === this.operationGeneration) {
+        this.state.phase = 'checking';
+        this.state.notice = '暂时无法确认上次结果，请稍后重试。';
+      }
+    } finally {
+      if (generation === this.operationGeneration) {
+        this.state.controlBusy = false;
+      }
+    }
   }
 }

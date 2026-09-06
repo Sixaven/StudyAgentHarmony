@@ -4,6 +4,7 @@ import { codePointCount, MAX_INPUT_CODE_POINTS } from '../state/InputText';
 export struct Composer {
   @Param draft: string = '';
   @Param canSend: boolean = false;
+  @Param stopping: boolean = false;
   @Param canStop: boolean = false;
   @Event onDraftChange: (text: string) => void = () => {};
   @Event onSend: () => void = () => {};
@@ -19,8 +20,9 @@ export struct Composer {
           .backgroundColor(Color.Transparent)
           .constraintSize({ minHeight: 48, maxHeight: 132 })
           .onChange((text: string) => this.onDraftChange(text))
-        if (this.canStop) {
-          Button($r('app.string.chat_stop'))
+        if (this.canStop || this.stopping) {
+          Button(this.stopping ? '停止中' : $r('app.string.chat_stop'))
+            .enabled(this.canStop)
             .id('chat-stop').height(44).fontSize(14)
             .backgroundColor($r('app.color.chat_accent'))
             .fontColor($r('app.color.chat_on_accent'))

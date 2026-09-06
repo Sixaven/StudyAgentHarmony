@@ -42,13 +42,13 @@ export struct MessageList {
   build() {
     Stack({ alignContent: Alignment.BottomEnd }) {
       List({ space: 26, scroller: this.scroller }) {
-        if (this.hasOlder) {
+        if (this.messages.length > 0) {
           ListItem() {
-            Button($r('app.string.chat_older'))
+            Button(this.hasOlder ? $r('app.string.chat_older') : '已显示全部消息')
               .type(ButtonType.Normal).backgroundColor(Color.Transparent)
               .fontColor($r('app.color.chat_secondary')).fontSize(13)
               .width('100%').height(44)
-              .enabled(!this.loadingOlder)
+              .enabled(this.hasOlder && !this.loadingOlder)
               .onClick(() => this.onLoadOlder())
           }
         }

@@ -1,6 +1,6 @@
 # UI 开发与阶段验收
 
-2026-09-06。M1、M2 的原生聊天页、Markdown/来源和模拟发送闭环已实现并在 API 20 模拟器运行。M3 HTTP/SSE 客户端适配与协议替身设备检查已完成，真实 Agent API 连通待服务端交付；停止/重试及持久恢复按 M4 推进。
+2026-09-06。M1–M4 已实现并完成 API 20 模拟器验收。M4 支持停止、网络核对/业务重试及持久恢复；已连接真实 Agent HTTP/SSE 和 SQLite，联调使用脚本模型。下文 M1–M3 记录保留为历史证据，当前运行与结果以末尾 M4 章节为准。
 
 ## 工程与入口
 
@@ -189,3 +189,52 @@ node docs/testing/chat-protocol-server.mjs normal
 本次新增三项回归检查，覆盖真实后端无 requestId 的错误外壳、冲突详情、非法可选 ID 与 POST 503。此前 M3 的 51 项检查为历史结果，本次执行结果单独记录。后端 busy 为现行公共错误码，UI 契约已同步。
 
 本次复核：54 项 Hypium 测试通过（原 51 项 + 3 项错误响应回归），API 20 构建通过。使用 UI 实际协议解析代码连接真实本地 HTTP/SSE、临时 SQLite 和脚本模型，确认 busy/request_conflict/retry_not_allowed/not_found 均映射为 rejected，完整 SSE 与终态保持正常；此项在 Node 中转译执行传输无关代码，不替代 HarmonyOS 设备联调。
+
+
+## M4 停止、重试和恢复
+
+停止使用独立 UUID；202 保持 stopping，等待服务端真实终态。终态早于停止响应时不回退；停止未知时保留核对入口。断线和业务失败的按钮均为“重试”：前者查询原请求，只有明确 not_found 才按原 ID、原体重发；后者按 canRetry 发送新 requestId 和原 taskId。409 后重新读取聊天并说明拒绝，不重新发送原文或猜测学习动作。
+
+PendingRequestStore 定义最小未确认操作日志；真实模式使用 DevicePendingRequestStore 的 Preferences 同步写入及 flushSync，先持久保存再发 HTTP。失败不会发送请求；未知结果不清理。已接受或明确拒绝后清理。记录按配置的服务地址隔离，不能拿另一服务器的请求重放；不在设备建立正式聊天数据库。模拟模式使用内存日志。
+
+EntryAbility 拥有依赖初始化和销毁，Index 只登记页面观察。页面可见且 Ability 在前台时恢复；后台释放订阅并使迟到回调失效，回前台先核对日志和 GET /chat，再恢复活跃任务观察。最终销毁取消 RCP 资源，绝不因此调用 stop。草稿在同一 Ability 生命周期内保留，进程重开恢复未确认操作及正式消息，不承诺持久保存未发送草稿。
+
+历史分页按 cursor 合并、按 messageId 去重；保留已读取历史、legacy/local 原归属。列表使用 maintainVisibleContentPosition，加载结束保持头部占位，避免移除历史按钮导致跳动；不强制把上滑阅读者拉回底部。
+
+## M4 真实服务与故障复核
+
+常规后端启动方式见规划库 docs/chat-api-usage.md：在后端根目录执行 `npm run chat:serve -- --mode script --dir var/chat-api-script`。只替换模型，Agent 编排、业务服务、HTTP/SSE 与 SQLite 均为真实实现。真实模型模式需要后端单独配置，不在客户端放密钥，也不在默认自动测试中调用。
+
+当前提交默认 fake/空地址。联调临时修改 ChatConfig 的对象值为 real 和设备可访问的 `/api/v1` 地址，不修改 mode 的联合类型。设备使用 localhost 前须明确建立 hdc rport。验证后恢复默认值，勿提交机器地址。
+
+可复用故障脚本 `docs/testing/real-chat-server.mjs` 从指定后端目录加载已构建代码，只监听本机 3000/3001；3000 是透传故障代理，3001 是真实 API。使用独立测试目录，不能指向日常数据库。示例：
+
+```powershell
+# 先在后端根目录执行 npm run build；然后在 UI 根目录执行：
+node docs/testing/real-chat-server.mjs D:/VsCode/Project/StudyAgent .test/m4-server
+& 'D:/Harmony/IDE/DevEco Studio/sdk/default/openharmony/toolchains/hdc.exe' -t 127.0.0.1:5555 rport tcp:3000 tcp:3000
+```
+
+将临时 UI 地址设为 `http://127.0.0.1:3000/api/v1`。测试目录中的 controls.json 支持 loseSend/loseStop/loseRetry（一次性丢弃已接受响应）、disconnectAfterSaved（一次性保存后断流）、failAfterEvaluation、holdRouting、holdAfterQuestion、delayMs；空对象恢复普通脚本模型。故障开关不新增生产服务接口，不修改正式 DTO，不伪造服务端返回。强制结束本测试进程后以原测试目录重启，可复核 server_restarted。
+
+已完成设备场景：学习题与来源、追问不替换原题、答案评价、接受响应丢失后的原请求恢复、评价后失败及业务重试、停止响应丢失、强制关闭应用后的 Preferences 恢复、成果保存后服务进程崩溃恢复，以及另一请求切换主题后旧重试被拒绝。停止 202/终态响应竞争、重复请求和后台迟到回调另有确定性回归检查。详见 [M4 验收记录](ui-milestone-4-acceptance.md)。
+
+## M4 自动化与设备测试入口
+
+本地 Hypium：沿用前文 Hvigor test 命令，共 71 项通过，0 失败/错误。API 20 应用和 ohosTest HAP 构建通过；Code Linter 0 错误，原有 6 条组件拆分建议。后端 `npm run chat:acceptance` 的 25 项真实 HTTP/SSE/SQLite 检查通过。
+
+新增 ChatFlow 设备检查保留 Ability.test，默认 fake 模式不联网；real 模式须显式 `-s chatReal true` 才注册真实流程。真实教学正文不作固定断言，校验原用户消息、助手保存记录、任务结束、草稿和来源弹层。运行前确保当前配置的服务器已启动、无活跃故障开关。
+
+```powershell
+$env:DEVECO_SDK_HOME = 'D:/Harmony/IDE/DevEco Studio/sdk'
+$env:NODE_HOME = 'D:/Harmony/IDE/DevEco Studio/tools/node'
+& 'D:/Harmony/IDE/DevEco Studio/tools/hvigor/bin/hvigorw.bat' --mode module -p product=default -p 'module=entry@ohosTest' assembleHap
+& 'D:/Harmony/IDE/DevEco Studio/sdk/default/openharmony/toolchains/hdc.exe' -t 127.0.0.1:5555 install entry/build/default/outputs/ohosTest/entry-ohosTest-unsigned.hap
+& 'D:/Harmony/IDE/DevEco Studio/sdk/default/openharmony/toolchains/hdc.exe' -t 127.0.0.1:5555 shell 'aa test -b com.example.studyagent -m entry_test -s unittest OpenHarmonyTestRunner -s chatReal true -s timeout 60000 -w 60'
+```
+
+先安装匹配配置的主 HAP（devecocli run）。fake 模式去掉 chatReal 参数。`-s timeout 60000` 是单项测试超时，`-w 60` 是命令等待时间；不能用默认 5 秒判断真实网络流程失败。此次真实设备测试 3 项通过（模板 1 + ChatFlow 2），0 失败/错误。
+
+本机为 DevEco Studio 6.0.0.858、Mate 70 Pro / HarmonyOS 6.0.0.48（API 20）模拟器。键盘缩放、列表阅读与来源弹层均已实测；Markdown 子集沿用 M2，没有扩大语法范围。外链成功打开仍受模拟器缺少浏览器限制，不将来源弹层通过写作浏览器打开成功。没有执行跨 SDK 兼容扫描、真机签名发布或真实模型质量评估。
+
+补充集成修正：RcpTransport 将配置验证移至请求入口，错误配置由页面加载失败状态展示，不在 Ability 初始化时崩溃；新增对应本地回归检查。

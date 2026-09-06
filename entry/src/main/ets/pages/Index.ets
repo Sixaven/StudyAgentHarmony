@@ -2,7 +2,7 @@ import { chatConfiguration } from '../chat/bootstrap/ChatConfig';
 import { Citation } from '../chat/contracts/ChatMessage';
 import { SourceSheet } from '../chat/sources/SourceSheet';
 import { KeyboardAvoidMode } from '@kit.ArkUI';
-import { createChatViewModel } from '../chat/bootstrap/ChatDependencies';
+import { getChatViewModel, attachChatPage, detachChatPage } from '../chat/bootstrap/ChatDependencies';
 import { ChatViewModel } from '../chat/state/ChatViewModel';
 import { ChatState } from '../chat/state/ChatState';
 import { MessageList } from '../chat/components/MessageList';
@@ -12,7 +12,7 @@ import { RequestStatus } from '../chat/components/RequestStatus';
 @Entry
 @ComponentV2
 struct Index {
-  private viewModel: ChatViewModel = createChatViewModel();
+  private viewModel: ChatViewModel = getChatViewModel();
   @Local chat: ChatState = this.viewModel.state;
   @Local sourcesVisible: boolean = false;
   @Local selectedSources: Citation[] = [];
@@ -24,11 +24,11 @@ struct Index {
 
   aboutToAppear(): void {
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
-    this.viewModel.load();
+    attachChatPage();
   }
 
   aboutToDisappear(): void {
-    this.viewModel.dispose();
+    detachChatPage();
   }
 
   build() {
@@ -60,12 +60,12 @@ struct Index {
         })
       }.layoutWeight(1).width('100%')
       RequestStatus({
-        phase: this.chat.phase, notice: this.chat.notice,
-        canRetryLoad: this.chat.canRetryLoad,
-        onRetry: () => { this.viewModel.load(); }
+        unconfirmed: this.chat.hasUnconfirmed, phase: this.chat.phase, notice: this.chat.notice,
+        canRetryLoad: this.chat.canRetryLoad, canRetry: this.chat.canRetry,
+        onRetry: () => { this.viewModel.requestRetry(); }
       })
       Composer({
-        draft: this.chat.draft, canSend: this.chat.canSend, canStop: this.chat.canStop,
+        stopping: this.chat.phase === 'stopping', draft: this.chat.draft, canSend: this.chat.canSend, canStop: this.chat.canStop,
         onDraftChange: (text: string) => this.viewModel.setDraft(text),
         onSend: () => this.viewModel.requestSend(),
         onStop: () => this.viewModel.requestStop()

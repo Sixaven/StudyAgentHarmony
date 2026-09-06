@@ -24,11 +24,10 @@ export interface ChatTransport {
 export class RcpTransport implements ChatTransport {
   private sessions: rcp.Session[] = [];
   private streamClosers: Map<rcp.Session, () => void> = new Map();
-  private baseUrl: string;
+  private baseUrl: string = '';
   private config: ChatConfiguration;
 
   constructor(config: ChatConfiguration) {
-    this.baseUrl = apiBaseUrl(config);
     this.config = config;
   }
 
@@ -67,6 +66,7 @@ export class RcpTransport implements ChatTransport {
   }
 
   async request(method: 'GET' | 'POST', path: string, body?: string): Promise<HttpReply> {
+    this.baseUrl = apiBaseUrl(this.config);
     const session = this.createSession();
     let size = 0;
     let content = '';
@@ -109,6 +109,7 @@ export class RcpTransport implements ChatTransport {
   }
 
   stream(path: string, observer: ByteObserver): ChatSubscription {
+    this.baseUrl = apiBaseUrl(this.config);
     const session = this.createSession();
     let disposed = false;
     let status = 0;

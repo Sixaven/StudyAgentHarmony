@@ -2,7 +2,7 @@ import { copyTask, fakeReplies, ReplyScenario } from './FakeReplies';
 import { ChatMessage, MessagePage } from '../contracts/ChatMessage';
 import { AcceptedMessage, ChatObserver, ChatService, ChatServiceError, ChatSnapshot,
   ChatSubscription, RequestResult, SendRequest } from '../contracts/ChatService';
-import { ChatEvent, TaskSnapshot } from '../contracts/ChatTask';
+import { ChatEvent, isActiveTask, TaskSnapshot } from '../contracts/ChatTask';
 import { initialChat, olderPage, partialFailure, sampleTask, sampleMessage } from './ChatFixtures';
 
 export type FakeScenario = 'ready' | 'empty' | 'loading_error' | 'running' | 'partial_failure';
@@ -19,10 +19,17 @@ class FakeSubscription implements ChatSubscription {
   }
 }
 
-// Explicit controls keep timing deterministic. Network replay/stop races can be added
-// here in later milestones without putting learning rules in the client.
+// Explicit controls model network/stop races without putting learning rules in the client.
 export class FakeChatService implements ChatService {
   scenario: FakeScenario;
+  loseNextResponse: boolean = false;
+  stopCompletesFirst: boolean = false;
+  stopCount: number = 0;
+  retryCount: number = 0;
+  private requests: Map<string, RequestResult> = new Map();
+  private bodies: Map<string, string> = new Map();
+  private tasks: Map<string, TaskSnapshot> = new Map();
+  private successors: Map<string, string> = new Map();
   private observers: ChatObserver[] = [];
   replyScenario: ReplyScenario = 'normal';
   autoAdvance: boolean = true;
@@ -55,7 +62,7 @@ export class FakeChatService implements ChatService {
     if (this.latest !== null) {
       snapshot.messages = snapshot.messages.concat(this.messages);
       snapshot.latestTask = this.latest;
-      snapshot.activeTask = this.latest.status === 'running' ? this.latest : null;
+      snapshot.activeTask = isActiveTask(this.latest) ? this.latest : null;
     }
     return snapshot;
   }
@@ -68,7 +75,19 @@ export class FakeChatService implements ChatService {
   }
 
   async send(request: SendRequest): Promise<AcceptedMessage> {
+    const replay = this.requests.get(request.requestId);
+    if (replay !== undefined) {
+      if (replay.kind !== 'send' || this.bodies.get(request.requestId) !== request.text) {
+        throw new ChatServiceError('rejected', 'request_conflict', '同一请求内容不一致。');
+      }
+      const task = await this.getTask(replay.task.taskId);
+      return { userMessage: task.savedMessages[0], task: task };
+    }
+    if (isActiveTask(this.latest)) {
+      throw new ChatServiceError('rejected', 'busy', '请等待当前任务结束。');
+    }
     this.sendCount++;
+    this.invalidateLatest();
     if (this.replyScenario === 'rejected') {
       throw new ChatServiceError('rejected', 'invalid_input', '模拟服务未接受此消息，请修改后发送。');
     }
@@ -85,14 +104,29 @@ export class FakeChatService implements ChatService {
     this.latest = task;
     this.replies = fakeReplies(this.replyScenario, task.taskId, request.requestId, sequence + 1);
     this.step = 0;
+    this.requests.set(request.requestId, { requestId: request.requestId, kind: 'send', task: task });
+    this.bodies.set(request.requestId, request.text);
+    this.tasks.set(task.taskId, task);
+    this.maybeLoseResponse();
     return { userMessage: user, task: task };
   }
 
   async findRequest(requestId: string): Promise<RequestResult> {
-    throw new ChatServiceError('rejected', 'not_found', '尚无对应请求。');
+    const result = this.requests.get(requestId);
+    if (result === undefined) {
+      throw new ChatServiceError('rejected', 'not_found', '尚无对应请求。');
+    }
+    return { requestId: requestId, kind: result.kind, task: await this.getTask(result.task.taskId) };
   }
 
   async getTask(taskId: string): Promise<TaskSnapshot> {
+    if (this.latest !== null && this.latest.taskId === taskId) {
+      return this.latest;
+    }
+    const previous = this.tasks.get(taskId);
+    if (previous !== undefined) {
+      return previous;
+    }
     const snapshot = await this.loadChat();
     const task = snapshot.activeTask ?? snapshot.latestTask;
     if (task === null || task.taskId !== taskId) {
@@ -135,6 +169,16 @@ export class FakeChatService implements ChatService {
 
   advance(): void {
     const current = this.latest;
+    if (current !== null && current.status === 'stopping') {
+      const terminal = copyTask(current);
+      terminal.status = 'cancelled';
+      terminal.canRetry = true;
+      terminal.revision++;
+      this.latest = terminal;
+      this.tasks.set(terminal.taskId, terminal);
+      this.emit(this.event('task_finished', terminal));
+      return;
+    }
     if (current === null || current.status !== 'running') {
       return;
     }
@@ -204,11 +248,83 @@ export class FakeChatService implements ChatService {
     }
   }
 
+  private invalidateLatest(): void {
+    if (this.latest !== null) {
+      const previous = copyTask(this.latest);
+      if (previous.canRetry) {
+        previous.canRetry = false;
+        previous.revision++;
+      }
+      this.tasks.set(previous.taskId, previous);
+      this.latest = previous;
+    }
+  }
+
+  private maybeLoseResponse(): void {
+    if (this.loseNextResponse) {
+      this.loseNextResponse = false;
+      throw new ChatServiceError('network', 'disconnected', '响应丢失。');
+    }
+  }
+
   async stop(taskId: string, requestId: string): Promise<TaskSnapshot> {
-    throw new ChatServiceError('rejected', 'demo_not_implemented', '停止交互尚未接入。');
+    const replay = this.requests.get(requestId);
+    if (replay !== undefined) {
+      if (replay.kind !== 'stop' || replay.task.taskId !== taskId) {
+        throw new ChatServiceError('rejected', 'request_conflict', '请求身份不一致。');
+      }
+      return this.getTask(taskId);
+    }
+    this.stopCount++;
+    const task = copyTask(await this.getTask(taskId));
+    if (isActiveTask(task)) {
+      task.status = 'stopping';
+      task.revision++;
+      this.latest = task;
+    }
+    this.requests.set(requestId, { requestId: requestId, kind: 'stop', task: task });
+    if (this.stopCompletesFirst) {
+      this.finish('task_finished');
+    }
+    this.maybeLoseResponse();
+    return task;
   }
 
   async retry(taskId: string, requestId: string): Promise<TaskSnapshot> {
-    throw new ChatServiceError('rejected', 'retry_not_allowed', '当前预览不支持任务重试。');
+    const replay = this.requests.get(requestId);
+    if (replay !== undefined) {
+      if (replay.kind !== 'retry' || this.bodies.get(requestId) !== taskId) {
+        throw new ChatServiceError('rejected', 'request_conflict', '请求身份不一致。');
+      }
+      return this.getTask(replay.task.taskId);
+    }
+    const successor = this.successors.get(taskId);
+    if (successor !== undefined) {
+      throw new ChatServiceError('rejected', 'retry_not_allowed', '该任务已有后续重试。',
+        { existingTaskId: successor });
+    }
+    const original = await this.getTask(taskId);
+    if (!original.canRetry || (this.latest !== null && this.latest.taskId !== taskId) ||
+      isActiveTask(this.latest)) {
+      throw new ChatServiceError('rejected', 'retry_not_allowed', '该任务已不可重试，请查看当前任务。');
+    }
+    this.retryCount++;
+    this.invalidateLatest();
+    const task = copyTask(original);
+    task.taskId = 'demo-retry-' + this.retryCount.toString();
+    task.requestId = requestId;
+    task.status = 'running';
+    task.canRetry = false;
+    task.revision = 1;
+    task.error = null;
+    this.latest = task;
+    this.tasks.set(task.taskId, task);
+    this.requests.set(requestId, { requestId: requestId, kind: 'retry', task: task });
+    this.bodies.set(requestId, taskId);
+    this.successors.set(taskId, task.taskId);
+    this.replies = [];
+    this.step = 1;
+    this.maybeLoseResponse();
+    return task;
   }
 }

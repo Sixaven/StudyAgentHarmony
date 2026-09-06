@@ -16,15 +16,29 @@ export class ChatState {
   @Trace initialized: boolean = false;
   @Trace loadingOlder: boolean = false;
   @Trace notice: string = '';
+  @Trace hasUnconfirmed: boolean = false;
+  @Trace controlBusy: boolean = false;
 
   get canSend(): boolean {
     const idle = this.phase === 'ready' || this.phase === 'failed';
-    return this.initialized && idle && !isActiveTask(this.task) &&
+    return this.initialized && !this.initialLoadFailed && !this.hasUnconfirmed &&
+      !this.controlBusy && idle && !isActiveTask(this.task) &&
       this.pending.length === 0 && inputError(this.draft) === '';
   }
 
   get canStop(): boolean {
-    return this.phase === 'processing' && isActiveTask(this.task);
+    return !this.controlBusy && !this.hasUnconfirmed && this.phase === 'processing' && isActiveTask(this.task);
+  }
+
+  get canRetryTask(): boolean {
+    return !this.controlBusy && !this.hasUnconfirmed && !this.initialLoadFailed &&
+      (this.phase === 'ready' || this.phase === 'failed') && this.task !== null &&
+      this.task.canRetry && !isActiveTask(this.task);
+  }
+
+  get canRetry(): boolean {
+    return !this.controlBusy && (this.canRetryLoad || this.hasUnconfirmed ||
+      this.phase === 'checking' || this.canRetryTask);
   }
 
   get canRetryLoad(): boolean {

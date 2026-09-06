@@ -5,6 +5,7 @@ export interface ChatConfiguration {
   streamIdleTimeoutMs: number;
 }
 
+// M4: use the real Agent server from docs/ui-development.md; no automatic fallback.
 // Set the address reachable FROM THE DEVICE, including /api/v1.
 // Empty by default: no assumption that device localhost is the development computer.
 export const chatConfiguration: ChatConfiguration = {

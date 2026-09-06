@@ -74,7 +74,8 @@ export default function chatStateTest() {
       const model = new ChatViewModel(new FakeChatService('running'));
       await model.load();
       model.setDraft('下一条草稿');
-      expect(model.state.phase).assertEqual('checking');
+      expect(model.state.phase).assertEqual('processing');
+      model.dispose();
       expect(model.state.canSend).assertFalse();
       expect(model.state.draft).assertEqual('下一条草稿');
     });
