@@ -1,0 +1,40 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "value": "#FFFFFF",
+      "name": "chat_on_accent"
+    },
+    {
+      "value": "#EAF0E8",
+      "name": "chat_bubble"
+    },
+    {
+      "value": "#26352F",
+      "name": "chat_text"
+    },
+    {
+      "value": "#E0E7DF",
+      "name": "chat_border"
+    },
+    {
+      "value": "#6F7C75",
+      "name": "chat_secondary"
+    },
+    {
+      "value": "#FAFBF9",
+      "name": "chat_background"
+    },
+    {
+      "value": "#FFFFFF",
+      "name": "chat_surface"
+    },
+    {
+      "value": "#466952",
+      "name": "chat_accent"
+    }
+  ]
+}

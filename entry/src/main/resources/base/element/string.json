@@ -1,0 +1,92 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "label"
+    },
+    {
+      "value": "StudyAgent",
+      "name": "chat_title"
+    },
+    {
+      "value": "一步一步，把知识变成理解",
+      "name": "chat_subtitle"
+    },
+    {
+      "value": "模拟预览",
+      "name": "chat_demo"
+    },
+    {
+      "value": "StudyAgent",
+      "name": "chat_assistant"
+    },
+    {
+      "value": "等待确认",
+      "name": "chat_unconfirmed"
+    },
+    {
+      "value": "加载更早消息",
+      "name": "chat_older"
+    },
+    {
+      "value": "回到最新",
+      "name": "chat_latest"
+    },
+    {
+      "value": "今天想学点什么？\n写下你的问题，我们一起从这里开始。",
+      "name": "chat_empty"
+    },
+    {
+      "value": "说说你想了解什么…",
+      "name": "chat_placeholder"
+    },
+    {
+      "value": "停止",
+      "name": "chat_stop"
+    },
+    {
+      "value": "发送",
+      "name": "chat_send"
+    },
+    {
+      "value": "重试",
+      "name": "chat_retry"
+    },
+    {
+      "value": "正在加载聊天…",
+      "name": "chat_loading"
+    },
+    {
+      "value": "正在发送…",
+      "name": "chat_sending"
+    },
+    {
+      "value": "正在整理回复…",
+      "name": "chat_processing"
+    },
+    {
+      "value": "正在停止，请稍候…",
+      "name": "chat_stopping"
+    },
+    {
+      "value": "正在确认上次处理结果…",
+      "name": "chat_checking"
+    },
+    {
+      "value": "暂时无法加载聊天。",
+      "name": "chat_load_failed"
+    },
+    {
+      "value": "本次生成未完成，已保存的内容仍可阅读。",
+      "name": "chat_failed"
+    }
+  ]
+}
